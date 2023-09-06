@@ -1,0 +1,208 @@
+nume: Dumitrescu Alexandra
+grupa: 333CA ACS CTI
+
+TEMA 3 ASC - Parallel Hashtable
+
+___________________________________________________
+
+Conținut
+
+ 1) Descrierea implementării
+    1.1) Detalii despre hashtable
+    1.2) GET
+    1.3) INSERT
+    1.4) RESIZE
+ 2) Rezultate obținute
+    2.1) Un output generat
+    2.2) Discuție parametrii obținuți. Observații generale
+  3) Feedback
+  4) Credite
+
+__________________________________________________
+
+1. DESCRIEREA IMPLEMENTĂRII
+
+1.1) Detalii despre hashtable
+
+În cadrul temei propuse, hashtable-ul nostru va fi reprezentat ca un buffer
+circular de obiecte tip -cheie, valoare- în zona de memorie accesibilă atât
+de pe host CPU, cât și de pe device GPU. În cazul apariției coliziunilor am
+ales să folosesc tehnica de linear proabing pentru a le rezolva.
+
+Există date despre hashtable precum numărul maxim de bucketuri și numărul
+curent de bucketuri ocupate care sunt ținute în zona de memorie CPU. În
+cadrul operației de insert, numărul curent de bucketuri ocupate se modifică
+și din acest motiv am ales să aloc în zona de memorie partajată aceste
+date într-o structură care se trimite threadurilor în funcțiile de kernel.
+
+Vectorii ce conțin cheile și valorile vin de pe CPU și le-am alocat
+și copiat conținutul de pe CPU în vectori separați pe GPU, pentru a le face
+vizibile și accesibile în funcțiile de kernel.
+
+1.2) GET()
+
+În cadrul metodei get, pentru a paraleliza am calculat, ținând cont
+de valoarea constantă de număr maxim de threaduri disponibile per bloc în
+deviceurile CUDA, numărul de blocuri necesare pentru a efectua numKeys
+operațtii de get, fiecare thread ocupându-se de un singur element. Trebuie să
+ținem cont că pot exista situații în care unele threaduri rămân fără task
+disponibil. Mi-am alocat pe GPU un array în care fiecare thread își trece
+elementul corespunzător găsit, urmând ca acesta să fie copiat în
+arrayul trimis pe CPU.
+
+În interiorul funcției de kernel, mai înâi fiecare thread își obține
+hash-ul corespunzător și începe circular să caute cheia în bufferul
+conținut în hashtable. Folosesc un trip count pentru a mă asigura că threadul
+iterează în întreg vectorul o singură dată și mă asigur că parcurgerea este
+făcută circular. În momentul în care threadul găsește cheia, adaugă elementul
+în vector. Observăm că nu este nevoie de operații atomice deoarece fiecare
+thread se ocupă se maxim un element care are poziție unică în buffer.
+
+1.3) INSERT()
+
+În cadrul funcției de insert, metoda aplicată este similară cu cea
+descrisă anterior, însă din cauza faptului că se modifică buffer-ul partajat
+al hashmapului, apar probleme de sincronizare. Pentru a modifica atributul
+hashmapului de contor de număr de buckets setate am folosit o variabilă care
+este incrementată atomic de fiecare thread care introduce o perech nouă
+în hashtable. Această variabilă nu se modifică și atunci când se updatează
+valoarea.
+Pentru a insera o cheie nouă în buffer, folosim atomic CAS pentru a încerca
+să detectăm dacă pe o poziție se află valoarea 0, ținând cont că hashmapul
+este setat cu 0 inițial, însemnând că pe poziția respectivă nu ar fi
+fost inserată nicio pereche. Dacă, în schimb, găsim fix valoarea cheii pe
+care vrem să o inserăm înseamnă că trebuie să modificăm valoarea
+În cazul în care vrem să adăugăm un set de elemente și detectăm că load
+factorul de 0.75f este depășit facem resize hashmapului, fie dublându-i
+dimensiunea maximă, fie dublând numărul de chei pe care vrem să îl
+inserăm în caz că dimensiunea maximă este 0.
+
+1.3) RESIZE()
+
+Pentru operația de resize am procedat asemănător celor explicate anterior.
+Logica de resize este simplă, facem rehash tuturor elementelor din
+vechiul buffer și le mutăm în bufferul nou.
+__________________________________________________
+
+2. REZULTATE OBȚINUTE
+
+2.1 Output generat
+
+------- Test T1 START ----------
+
+HASH_BATCH_INSERT count: 500000 speed: 109M/sec loadfactor: 50%
+HASH_BATCH_INSERT count: 500000 speed: 82M/sec loadfactor: 50%
+HASH_BATCH_GET count: 500000 speed: 236M/sec loadfactor: 50%
+HASH_BATCH_GET count: 500000 speed: 158M/sec loadfactor: 50%
+----------------------------------------------
+AVG_INSERT: 95 M/sec, AVG_GET: 197 M/sec, MIN_SPEED_REQ: 0 M/sec
+
+
+------- Test T1 END ---------- [ OK RESULT: 15 pts ]
+
+Total so far: 15 / 80
+
+
+
+------- Test T2 START ----------
+
+HASH_BATCH_INSERT count: 1000000 speed: 136M/sec loadfactor: 50%
+HASH_BATCH_INSERT count: 1000000 speed: 98M/sec loadfactor: 50%
+HASH_BATCH_GET count: 1000000 speed: 188M/sec loadfactor: 50%
+HASH_BATCH_GET count: 1000000 speed: 198M/sec loadfactor: 50%
+----------------------------------------------
+AVG_INSERT: 117 M/sec, AVG_GET: 193 M/sec, MIN_SPEED_REQ: 20 M/sec
+
+
+------- Test T2 END ---------- [ OK RESULT: 15 pts ]
+
+Total so far: 30 / 80
+
+
+
+------- Test T3 START ----------
+
+HASH_BATCH_INSERT count: 1000000 speed: 135M/sec loadfactor: 50%
+HASH_BATCH_INSERT count: 1000000 speed: 96M/sec loadfactor: 50%
+HASH_BATCH_INSERT count: 1000000 speed: 217M/sec loadfactor: 75%
+HASH_BATCH_INSERT count: 1000000 speed: 62M/sec loadfactor: 50%
+HASH_BATCH_GET count: 1000000 speed: 188M/sec loadfactor: 50%
+HASH_BATCH_GET count: 1000000 speed: 187M/sec loadfactor: 50%
+HASH_BATCH_GET count: 1000000 speed: 187M/sec loadfactor: 50%
+HASH_BATCH_GET count: 1000000 speed: 179M/sec loadfactor: 50%
+----------------------------------------------
+AVG_INSERT: 127 M/sec, AVG_GET: 185 M/sec, MIN_SPEED_REQ: 40 M/sec
+
+
+------- Test T3 END ---------- [ OK RESULT: 15 pts ]
+
+Total so far: 45 / 80
+
+
+
+------- Test T4 START ----------
+
+HASH_BATCH_INSERT count: 20000000 speed: 178M/sec loadfactor: 50%
+HASH_BATCH_INSERT count: 20000000 speed: 122M/sec loadfactor: 50%
+HASH_BATCH_INSERT count: 20000000 speed: 275M/sec loadfactor: 75%
+HASH_BATCH_INSERT count: 20000000 speed: 72M/sec loadfactor: 50%
+HASH_BATCH_GET count: 20000000 speed: 322M/sec loadfactor: 50%
+HASH_BATCH_GET count: 20000000 speed: 316M/sec loadfactor: 50%
+HASH_BATCH_GET count: 20000000 speed: 313M/sec loadfactor: 50%
+HASH_BATCH_GET count: 20000000 speed: 304M/sec loadfactor: 50%
+----------------------------------------------
+AVG_INSERT: 162 M/sec, AVG_GET: 314 M/sec, MIN_SPEED_REQ: 50 M/sec
+
+
+------- Test T4 END ---------- [ OK RESULT: 15 pts ]
+
+Total so far: 60 / 80
+
+
+
+------- Test T5 START ----------
+
+HASH_BATCH_INSERT count: 50000000 speed: 192M/sec loadfactor: 50%
+HASH_BATCH_INSERT count: 50000000 speed: 132M/sec loadfactor: 50%
+HASH_BATCH_GET count: 50000000 speed: 315M/sec loadfactor: 50%
+HASH_BATCH_GET count: 50000000 speed: 308M/sec loadfactor: 50%
+----------------------------------------------
+AVG_INSERT: 162 M/sec, AVG_GET: 312 M/sec, MIN_SPEED_REQ: 50 M/sec
+
+
+------- Test T5 END ---------- [ OK RESULT: 10 pts ]
+
+Total so far: 70 / 80
+
+
+
+------- Test T6 START ----------
+
+HASH_BATCH_INSERT count: 10000000 speed: 223M/sec loadfactor: 50%
+HASH_BATCH_INSERT count: 10000000 speed: 156M/sec loadfactor: 50%
+HASH_BATCH_INSERT count: 10000000 speed: 271M/sec loadfactor: 75%
+HASH_BATCH_INSERT count: 10000000 speed: 72M/sec loadfactor: 50%
+HASH_BATCH_INSERT count: 10000000 speed: 299M/sec loadfactor: 62%
+HASH_BATCH_INSERT count: 10000000 speed: 248M/sec loadfactor: 75%
+
+------- Test T6 END ---------- [ FAILED ]
+
+2.2 Discuție parametrii obținuți. Observații generale
+
+Putem observa că exact cum ne-am propus nu se depășește niciodată load
+factorul maxim impus de 0.75.
+Putem să observăm că timpul de get este mai mare decât timpul de get,
+contrar așteptărilor teoretice prin care operația de get este mai rapidă.
+Pentru a explica acest aspect, putem să ne gândim că se găsesc numeroase
+coliziuni, ceea ce implică un overhead în căutarea poziției corecte a
+hashului, adică, în cazul nostru, o parcurgere în întreg arrayul.
+Mai mult decât atât, acest rezultat ar putea fi justificat și
+de load factorul ridicat pe care îl observăm deoarece înseamnă
+ca hashtableul este aproape plin, ceea ce conduce la mai multe
+posibile coliziuni.
+
+
+CREDITE
+https://stackoverflow.com/questions/664014/what-integer-hash-function-are-good-that-accepts-an-integer-hash-key/12996028#12996028
+
+
